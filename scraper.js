@@ -13,10 +13,10 @@ const TARGETS = [
     { url: '/es/coins/countries', file: 'paises.csv', key: 'PAISES' }
 ];
 
-// CORRECCIÓN CLAVE: Separar por " - " (guion con espacios) o por "(" 
-// Esto evita que países como "Guinea-Bissau" se corten y se consideren duplicados.
+// NUEVA LÓGICA: Solo eliminamos desde el paréntesis de apertura en adelante.
+// Conserva guiones, símbolos de moneda y nombres compuestos completos.
 const cleanName = (text) => {
-    return text.split(/\s+[-–]\s+|\(/)[0].trim();
+    return text.split('(')[0].trim();
 };
 
 const extractExpectedCount = (html) => {
@@ -44,10 +44,8 @@ async function scrapeData() {
             console.log(`\nNavegando a: ${target.url}...`);
             await page.goto(BASE_URL + target.url, { waitUntil: 'networkidle2', timeout: 60000 });
             
-            // Pausa inicial
             await new Promise(r => setTimeout(r, 3000));
             
-            // Scroll suave hacia abajo para asegurar que todos los elementos ocultos carguen
             await page.evaluate(async () => {
                 await new Promise((resolve) => {
                     let totalHeight = 0;
@@ -75,7 +73,6 @@ async function scrapeData() {
                 const relativeUrl = $(element).attr('href');
                 const rawName = $(element).text().trim();
                 
-                // Filtro exacto: solo tomar enlaces de listados reales
                 if (relativeUrl && relativeUrl.includes('/es/coins/list/')) {
                     const clean = cleanName(rawName);
                     
