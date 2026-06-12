@@ -6,18 +6,16 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE_URL = 'https://colnect.com';
+
+// 1. Regex específico para cada categoría. Garantiza capturar las URLs reales de la grilla y descartar menús basura.
 const TARGETS = [
-    { url: '/es/coins/currencies', file: 'denominaciones.csv', key: 'DENOMINACIONES' },
-    { url: '/es/coins/compositions', file: 'material.csv', key: 'MATERIAL' },
-    { url: '/es/coins/face_values', file: 'valor_facial.csv', key: 'VALOR_FACIAL' },
-    { url: '/es/coins/countries', file: 'paises.csv', key: 'PAISES' }
+    { url: '/es/coins/currencies', file: 'denominaciones.csv', key: 'DENOMINACIONES', regex: /\/es\/coins\/(list\/)?currency\//i },
+    { url: '/es/coins/compositions', file: 'material.csv', key: 'MATERIAL', regex: /\/es\/coins\/(list\/)?composition\//i },
+    { url: '/es/coins/face_values', file: 'valor_facial.csv', key: 'VALOR_FACIAL', regex: /\/es\/coins\/(list\/)?face_value\//i },
+    { url: '/es/coins/countries', file: 'paises.csv', key: 'PAISES', regex: /\/es\/coins\/(list\/)?country\//i }
 ];
 
-// NUEVA LÓGICA: Solo eliminamos desde el paréntesis de apertura en adelante.
-// Conserva guiones, símbolos de moneda y nombres compuestos completos.
-const cleanName = (text) => {
-    return text.split('(')[0].trim();
-};
+const cleanName = (text) => text.split('(')[0].trim();
 
 const extractExpectedCount = (html) => {
     const $ = cheerio.load(html);
@@ -41,52 +39,94 @@ async function scrapeData() {
 
     for (const target of TARGETS) {
         try {
-            console.log(`\nNavegando a: ${target.url}...`);
-            await page.goto(BASE_URL + target.url, { waitUntil: 'networkidle2', timeout: 60000 });
-            
-            await new Promise(r => setTimeout(r, 3000));
-            
-            await page.evaluate(async () => {
-                await new Promise((resolve) => {
-                    let totalHeight = 0;
-                    let distance = 200;
-                    let timer = setInterval(() => {
-                        let scrollHeight = document.body.scrollHeight;
-                        window.scrollBy(0, distance);
-                        totalHeight += distance;
-                        if(totalHeight >= scrollHeight - window.innerHeight){
-                            clearInterval(timer);
-                            resolve();
-                        }
-                    }, 50);
-                });
-            });
-
-            await new Promise(r => setTimeout(r, 2000));
-            
-            const html = await page.content();
-            const $ = cheerio.load(html);
+            console.log(`\n=========================================`);
+            console.log(`Iniciando extracción de: ${target.key}`);
             
             let records = [];
-            
-            $('a').each((index, element) => {
-                const relativeUrl = $(element).attr('href');
-                const rawName = $(element).text().trim();
-                
-                if (relativeUrl && relativeUrl.includes('/es/coins/list/')) {
-                    const clean = cleanName(rawName);
-                    
-                    if (clean.length > 1 && !clean.toLowerCase().includes('mostrando') && !records.find(r => r.name === clean)) {
-                        records.push({ name: clean, url: BASE_URL + relativeUrl });
-                    }
-                }
-            });
+            let currentPageUrl = BASE_URL + target.url;
+            let hasNextPage = true;
+            let expectedCount = 0;
+            let pageNum = 1;
 
-            const expectedCount = extractExpectedCount(html);
-            console.log(`-> Registros obtenidos: ${records.length} | Esperados: ${expectedCount}`);
+            // 2. BUCLE DE PAGINACIÓN: Sigue buscando mientras exista el botón de siguiente
+            while (hasNextPage) {
+                console.log(` -> Escaneando página ${pageNum} (${currentPageUrl})...`);
+                await page.goto(currentPageUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                
+                await new Promise(r => setTimeout(r, 2000));
+                
+                await page.evaluate(async () => {
+                    await new Promise((resolve) => {
+                        let lastHeight = 0;
+                        let retries = 0;
+                        let timer = setInterval(() => {
+                            window.scrollBy(0, 800);
+                            let currentHeight = document.body.scrollHeight;
+                            if (currentHeight === lastHeight) {
+                                retries++;
+                                if (retries >= 4) {
+                                    clearInterval(timer);
+                                    resolve();
+                                }
+                            } else {
+                                lastHeight = currentHeight;
+                                retries = 0;
+                            }
+                        }, 500);
+                    });
+                });
+
+                const html = await page.content();
+                const $ = cheerio.load(html);
+                
+                if (pageNum === 1) {
+                    expectedCount = extractExpectedCount(html);
+                    console.log(` -> Colnect indica que hay ${expectedCount} registros en total.`);
+                }
+                
+                $('a').each((index, element) => {
+                    const relativeUrl = $(element).attr('href');
+                    const rawName = $(element).text().trim();
+                    
+                    if (relativeUrl && relativeUrl.match(target.regex)) {
+                        const clean = cleanName(rawName);
+                        if (clean.length > 1 && !clean.toLowerCase().includes('mostrando') && !records.find(r => r.name === clean)) {
+                            // Validar que no se metan botones sueltos de navegación
+                            if (!clean.includes('Siguiente') && !clean.includes('Anterior') && clean !== '»' && clean !== '«') {
+                                records.push({ name: clean, url: BASE_URL + relativeUrl });
+                            }
+                        }
+                    }
+                });
+
+                // 3. DETECTAR EL BOTÓN DE "SIGUIENTE"
+                const nextHref = await page.evaluate(() => {
+                    let links = Array.from(document.querySelectorAll('a'));
+                    let nextLink = links.find(el => {
+                        let text = el.textContent.trim();
+                        return el.classList.contains('next') || el.classList.contains('pages_next') || text === '»' || text.includes('Siguiente ›');
+                    });
+
+                    // Verifica que Colnect no lo haya marcado como inactivo (fin de lista)
+                    if (nextLink && !nextLink.parentElement.classList.contains('inactive')) {
+                        return nextLink.getAttribute('href');
+                    }
+                    return null;
+                });
+
+                if (nextHref) {
+                    currentPageUrl = nextHref.startsWith('http') ? nextHref : BASE_URL + nextHref;
+                    pageNum++;
+                    await new Promise(r => setTimeout(r, 2000));
+                } else {
+                    hasNextPage = false;
+                }
+            }
+
+            console.log(`✅ Finalizado ${target.key}: ${records.length} obtenidos de ${expectedCount} esperados.`);
 
             if (records.length === 0) {
-                console.error(`⚠️ No se encontraron registros.`);
+                console.error(`⚠️ No se obtuvieron registros.`);
                 allSuccess = false;
                 continue;
             }
@@ -97,12 +137,10 @@ async function scrapeData() {
             });
 
             fs.writeFileSync(path.join(__dirname, target.file), csvContent, 'utf8');
-            console.log(`-> Archivo ${target.file} guardado con éxito.`);
-            
             newCounts[target.key] = records.length;
 
         } catch (error) {
-            console.error(`❌ Error al obtener ${target.url}:`, error.message);
+            console.error(`❌ Error en ${target.url}:`, error.message);
             allSuccess = false;
         }
     }
@@ -145,9 +183,9 @@ function updateVersionFile(newCounts) {
         let parts = version.split('.');
         parts[2] = parseInt(parts[2], 10) + 1;
         version = parts.join('.');
-        console.log(`\n🔄 Se detectaron cambios reales en las cantidades. Nueva versión: ${version}`);
+        console.log(`\n🔄 Actualización exitosa. Nueva versión: ${version}`);
     } else {
-        console.log(`\n✅ No hay cambios en las cantidades. Se mantiene la versión: ${version}`);
+        console.log(`\n✅ Archivos idénticos a la versión anterior (${version}).`);
     }
 
     let newVersionContent = `VERSION = ${version}\n`;
