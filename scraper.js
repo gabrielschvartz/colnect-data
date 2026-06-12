@@ -13,7 +13,11 @@ const TARGETS = [
     { url: '/es/coins/countries', file: 'paises.csv', key: 'PAISES' }
 ];
 
-const cleanName = (text) => text.split(/[-–(]/)[0].trim();
+// CORRECCIÓN CLAVE: Separar por " - " (guion con espacios) o por "(" 
+// Esto evita que países como "Guinea-Bissau" se corten y se consideren duplicados.
+const cleanName = (text) => {
+    return text.split(/\s+[-–]\s+|\(/)[0].trim();
+};
 
 const extractExpectedCount = (html) => {
     const $ = cheerio.load(html);
@@ -26,7 +30,7 @@ async function scrapeData() {
     let newCounts = {};
     let allSuccess = true;
 
-    console.log("Iniciando navegador Chrome fantasma (Plan B)...");
+    console.log("Iniciando navegador Chrome fantasma...");
     const browser = await puppeteer.launch({
         headless: "new",
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -38,11 +42,29 @@ async function scrapeData() {
     for (const target of TARGETS) {
         try {
             console.log(`\nNavegando a: ${target.url}...`);
-            // Esperamos hasta que la red esté inactiva para asegurar que pase Cloudflare
             await page.goto(BASE_URL + target.url, { waitUntil: 'networkidle2', timeout: 60000 });
             
-            // Pausa estratégica de 5 segundos para que la web cargue su contenido real
-            await new Promise(r => setTimeout(r, 5000));
+            // Pausa inicial
+            await new Promise(r => setTimeout(r, 3000));
+            
+            // Scroll suave hacia abajo para asegurar que todos los elementos ocultos carguen
+            await page.evaluate(async () => {
+                await new Promise((resolve) => {
+                    let totalHeight = 0;
+                    let distance = 200;
+                    let timer = setInterval(() => {
+                        let scrollHeight = document.body.scrollHeight;
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+                        if(totalHeight >= scrollHeight - window.innerHeight){
+                            clearInterval(timer);
+                            resolve();
+                        }
+                    }, 50);
+                });
+            });
+
+            await new Promise(r => setTimeout(r, 2000));
             
             const html = await page.content();
             const $ = cheerio.load(html);
@@ -53,11 +75,11 @@ async function scrapeData() {
                 const relativeUrl = $(element).attr('href');
                 const rawName = $(element).text().trim();
                 
-                // Filtro heurístico: extrae enlaces reales de Colnect que tienen paréntesis o guiones
-                if (relativeUrl && relativeUrl.includes('/es/coins/') && (rawName.includes('(') || rawName.includes('-'))) {
+                // Filtro exacto: solo tomar enlaces de listados reales
+                if (relativeUrl && relativeUrl.includes('/es/coins/list/')) {
                     const clean = cleanName(rawName);
                     
-                    if (clean.length > 0 && !clean.toLowerCase().includes('mostrando') && !records.find(r => r.name === clean)) {
+                    if (clean.length > 1 && !clean.toLowerCase().includes('mostrando') && !records.find(r => r.name === clean)) {
                         records.push({ name: clean, url: BASE_URL + relativeUrl });
                     }
                 }
@@ -67,7 +89,7 @@ async function scrapeData() {
             console.log(`-> Registros obtenidos: ${records.length} | Esperados: ${expectedCount}`);
 
             if (records.length === 0) {
-                console.error(`⚠️ No se encontraron registros. Cloudflare sigue bloqueando o la estructura cambió.`);
+                console.error(`⚠️ No se encontraron registros.`);
                 allSuccess = false;
                 continue;
             }
@@ -99,7 +121,7 @@ async function scrapeData() {
 
 function updateVersionFile(newCounts) {
     const versionPath = path.join(__dirname, 'version.txt');
-    let version = '1.0.1'; // Partimos de la que ya generó
+    let version = '1.0.0'; 
     let oldCounts = {};
 
     if (fs.existsSync(versionPath)) {
@@ -127,6 +149,8 @@ function updateVersionFile(newCounts) {
         parts[2] = parseInt(parts[2], 10) + 1;
         version = parts.join('.');
         console.log(`\n🔄 Se detectaron cambios reales en las cantidades. Nueva versión: ${version}`);
+    } else {
+        console.log(`\n✅ No hay cambios en las cantidades. Se mantiene la versión: ${version}`);
     }
 
     let newVersionContent = `VERSION = ${version}\n`;
