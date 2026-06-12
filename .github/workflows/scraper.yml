@@ -1,0 +1,39 @@
+name: Colnect Scraper Auto-Update
+
+on:
+  schedule:
+    # Se ejecuta en el minuto 0, cada 6 horas
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Permite ejecutarlo manualmente desde GitHub si lo necesitas
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest
+
+    # Permisos necesarios para poder hacer el commit de vuelta al repositorio
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Ejecutar el script de Scraping
+        run: node scraper.js
+
+      - name: Hacer Commit y Push de los CSV y version.txt
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add *.csv version.txt
+          # Si no hay cambios en los archivos, el commit fallará, por eso usamos || true
+          git commit -m "Auto-update: Actualización de catálogos y versión" || true
+          git push
