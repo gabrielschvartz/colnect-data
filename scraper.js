@@ -134,4 +134,39 @@ async function scrapeData() {
             // Guardar el nuevo CSV sin la primera línea de cabecera
             let csvContent = '';
             finalRecords.forEach(record => {
-                csvContent += `"${record.name}","${record.url}"\n
+                csvContent += `"${record.name}","${record.url}"\n`;
+            });
+            fs.writeFileSync(path.join(__dirname, target.file), csvContent, 'utf8');
+            
+            // Actualizamos el número para escribirlo luego en el nuevo version.txt
+            newCounts[target.key] = expectedCount;
+
+        } catch (error) {
+            console.error(`❌ Error al procesar ${target.url}:`, error.message);
+            allSuccess = false;
+        }
+    }
+
+    await browser.close();
+
+    // PASO 4: Actualizar version.txt solo si hubo cambios y no hubo errores fatales
+    if (hasGlobalChanges && allSuccess) {
+        let parts = currentVersion.split('.');
+        parts[2] = parseInt(parts[2], 10) + 1;
+        let newVersion = parts.join('.');
+        
+        console.log(`\n=========================================`);
+        console.log(`🔄 Se actualizaron bases de datos. Incrementando versión a ${newVersion}`);
+        
+        let newVersionContent = `VERSION = ${newVersion}\n`;
+        for (const key in newCounts) {
+            newVersionContent += `${key} = ${newCounts[key]}\n`;
+        }
+        fs.writeFileSync(path.join(__dirname, 'version.txt'), newVersionContent, 'utf8');
+    } else if (!hasGlobalChanges) {
+        console.log(`\n=========================================`);
+        console.log(`✅ Proceso finalizado sin novedades en Colnect. Mantenemos versión ${currentVersion}`);
+    }
+}
+
+scrapeData();
