@@ -4,13 +4,13 @@ puppeteer.use(StealthPlugin());
 const fs = require('fs');
 const path = require('path');
 
-const BASE_URL = 'https://colnect.com';
+const BASE_URL = 'https://colnect.com/es/coins';
 
 const TARGETS = [
-    { url: '/es/coins/currencies', file: 'denominaciones.csv', key: 'DENOMINACIONES', splitKey: '/currency/' },
-    { url: '/es/coins/compositions', file: 'material.csv', key: 'MATERIAL', splitKey: '/composition/' },
-    { url: '/es/coins/face_values', file: 'valor_facial.csv', key: 'VALOR_FACIAL', splitKey: '/face_value/' },
-    { url: '/es/coins/countries', file: 'paises.csv', key: 'PAISES', splitKey: '/country/' }
+    { url: '/currencies', file: 'denominaciones.csv', key: 'DENOMINACIONES', splitKey: '/currency/' },
+    { url: '/compositions', file: 'material.csv', key: 'MATERIAL', splitKey: '/composition/' },
+    { url: '/face_values', file: 'valor_facial.csv', key: 'VALOR_FACIAL', splitKey: '/face_value/' },
+    { url: '/countries', file: 'paises.csv', key: 'PAISES', splitKey: '/country/' }
 ];
 
 // Función para leer el estado actual del version.txt
