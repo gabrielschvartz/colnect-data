@@ -37,7 +37,7 @@ async function scrapeData() {
     let oldCounts = localData.counts;
     let currentVersion = localData.version;
     
-    // Clonamos los contadores antiguos. Solo se actualizarán los que realmente cambien.
+    // Clonamos los contadores antiguos
     let newCounts = { ...oldCounts }; 
     let hasGlobalChanges = false;
     let allSuccess = true;
@@ -70,13 +70,13 @@ async function scrapeData() {
             const localCount = oldCounts[target.key] || 0;
             console.log(` -> Colnect reporta: ${expectedCount} | Archivo local tiene: ${localCount}`);
 
-            // PASO 2: La Comparación Maestra
+            // PASO 2: Comparación delta
             if (expectedCount > 0 && expectedCount === localCount) {
                 console.log(`✅ Cantidades idénticas. Se omite la descarga de ${target.key} para ahorrar recursos.`);
-                continue; // Salta a la siguiente categoría del bucle
+                continue; 
             }
 
-            // PASO 3: Si hay diferencias, arranca el motor de scraping para esta categoría
+            // PASO 3: Scraping profundo
             console.log(`🔄 Diferencia detectada. Iniciando scraping profundo para actualizar ${target.file}...`);
             hasGlobalChanges = true;
             
@@ -88,18 +88,34 @@ async function scrapeData() {
                 let loopUrl = BASE_URL + target.url + (pageNum > 1 ? `/page/${pageNum}` : '');
                 console.log(`   -> Extrayendo datos de página ${pageNum}...`);
                 
-                if (pageNum > 1) { // La página 1 ya está cargada
+                if (pageNum > 1) { 
                     await page.goto(loopUrl, { waitUntil: 'networkidle2', timeout: 60000 });
                     await new Promise(r => setTimeout(r, 2000));
                 }
                 
-                const pageData = await page.evaluate((splitKey) => {
+                // Pasamos tanto el splitKey como el targetKey al navegador
+                const pageData = await page.evaluate((splitKey, targetKey) => {
                     let resultados = [];
+                    
+                    // NUEVA LÓGICA DE NORMALIZACIÓN (Diccionario Unicode a Texto Plano)
+                    const fractionMap = {
+                        '½': '1/2', '⅓': '1/3', '⅔': '2/3', '¼': '1/4', '¾': '3/4',
+                        '⅕': '1/5', '⅖': '2/5', '⅗': '3/5', '⅘': '4/5', '⅙': '1/6',
+                        '⅚': '5/6', '⅛': '1/8', '⅜': '3/8', '⅝': '5/8', '⅞': '7/8',
+                        '⁄': '/' // Intercepta la barra especial de Colnect
+                    };
+
                     document.querySelectorAll('a').forEach(enlace => {
                         let url = enlace.href;
                         if (url.includes(splitKey) && !url.includes('/page/')) {
                             let textoOriginal = enlace.innerText.trim().replace(/\n/g, ' ');
                             let textoLimpio = textoOriginal.replace(/\s*\([^)]*\)$/, '').trim();
+                            
+                            // APLICACIÓN DEL FILTRO SOLO A VALOR FACIAL
+                            if (targetKey === 'VALOR_FACIAL') {
+                                textoLimpio = textoLimpio.replace(/[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞⁄]/g, match => fractionMap[match]);
+                            }
+
                             let fragmentoUrl = url.split(splitKey)[1];
                             
                             if (fragmentoUrl && textoLimpio !== "") {
@@ -111,7 +127,7 @@ async function scrapeData() {
                         }
                     });
                     return resultados;
-                }, target.splitKey);
+                }, target.splitKey, target.key);
 
                 let newItemsFound = 0;
                 for (const item of pageData) {
@@ -138,7 +154,6 @@ async function scrapeData() {
             });
             fs.writeFileSync(path.join(__dirname, target.file), csvContent, 'utf8');
             
-            // Actualizamos el número para escribirlo luego en el nuevo version.txt
             newCounts[target.key] = expectedCount;
 
         } catch (error) {
@@ -149,7 +164,7 @@ async function scrapeData() {
 
     await browser.close();
 
-    // PASO 4: Actualizar version.txt solo si hubo cambios y no hubo errores fatales
+    // PASO 4: Actualizar version.txt
     if (hasGlobalChanges && allSuccess) {
         let parts = currentVersion.split('.');
         parts[2] = parseInt(parts[2], 10) + 1;
